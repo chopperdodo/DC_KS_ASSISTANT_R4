@@ -44,7 +44,7 @@ class Events(commands.Cog):
     @app_commands.command(name="add", description="Add a new event (UTC time)")
     @app_commands.describe(
         name="Name of the event (Select or type custom)",
-        time="Time in UTC (YYYY-MM-DD HH:MM)",
+        time="Time in UTC (MM-DD HH:MM or YYYY-MM-DD HH:MM)",
         repeat="Number of times to repeat (optional)",
         interval="Interval between repeats e.g. 2d, 1w, 12h (optional)"
     )
@@ -54,12 +54,17 @@ class Events(commands.Cog):
         await interaction.response.defer()
 
         try:
-            # Parse base time as UTC
+            # Try parsing with year first
             start_time = datetime.datetime.strptime(time, "%Y-%m-%d %H:%M")
-            # Ensure it's treated as UTC (though naive datetime is fine if we are consistent)
         except ValueError:
-            await interaction.followup.send("Invalid time format. Please use `YYYY-MM-DD HH:MM` (e.g., 2025-11-30 13:00)", ephemeral=True)
-            return
+            try:
+                # Try parsing without year (assume current year)
+                dt_no_year = datetime.datetime.strptime(time, "%m-%d %H:%M")
+                current_year = datetime.datetime.now().year
+                start_time = dt_no_year.replace(year=current_year)
+            except ValueError:
+                await interaction.followup.send("Invalid time format. Please use `MM-DD HH:MM` or `YYYY-MM-DD HH:MM`", ephemeral=True)
+                return
 
         interval_delta = self.parse_interval(interval)
         if repeat > 0 and not interval_delta:
