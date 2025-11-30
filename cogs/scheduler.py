@@ -20,26 +20,6 @@ class Scheduler(commands.Cog):
         
         print(f"\n🔍 [SCHEDULER] Running reminder check at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # Get announcement channel
-        channel_id = self.bot.announcement_channel_id or os.getenv("ANNOUNCEMENT_CHANNEL_ID")
-        if not channel_id:
-            print("⚠️ [SCHEDULER] No announcement channel set - skipping reminder check")
-            return
-        
-        print(f"📢 [SCHEDULER] Using announcement channel ID: {channel_id}")
-        
-        try:
-            channel = self.bot.get_channel(int(channel_id))
-        except (ValueError, TypeError):
-            print(f"❌ [SCHEDULER] Invalid channel ID: {channel_id}")
-            return
-
-        if not channel:
-            print(f"❌ [SCHEDULER] Could not find channel with ID {channel_id}")
-            return
-        
-        print(f"✅ [SCHEDULER] Found channel: #{channel.name}")
-
         events = await database.get_upcoming_reminders()
         now = datetime.datetime.now()
         
@@ -52,6 +32,27 @@ class Scheduler(commands.Cog):
         await database.delete_old_events()
 
         for event in events:
+            # Get guild channel
+            guild_id = event['guild_id']
+            if not guild_id:
+                # Legacy event or error
+                print(f"⚠️ Event {event['id']} has no guild_id, skipping")
+                continue
+                
+            channel_id = await database.get_guild_channel(guild_id)
+            if not channel_id:
+                print(f"⚠️ Guild {guild_id} has no channel set, skipping reminder for event {event['id']}")
+                continue
+
+            try:
+                channel = self.bot.get_channel(channel_id)
+                if not channel:
+                    # Try fetching if not in cache
+                    channel = await self.bot.fetch_channel(channel_id)
+            except Exception as e:
+                print(f"❌ Could not get channel {channel_id}: {e}")
+                continue
+
             # event_time is a string in ISO format (or whatever sqlite stores)
             # aiosqlite/sqlite3 default timestamp is usually string "YYYY-MM-DD HH:MM:SS"
             # We need to parse it back to datetime
@@ -69,11 +70,10 @@ class Scheduler(commands.Cog):
             minutes_diff = time_diff.total_seconds() / 60
             
             print(f"\n  📅 Event: {event['name']} (ID: {event['id']})")
+            print(f"     Guild ID: {guild_id}")
             print(f"     Current time: {now.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"     Event time:   {event_time.strftime('%Y-%m-%d %H:%M:%S')}")
             print(f"     Time until event: {minutes_diff:.1f} minutes")
-            print(f"     30-min reminder sent: {bool(event['reminder_30_sent'])}")
-            print(f"     5-min reminder sent: {bool(event['reminder_5_sent'])}")
 
             # Create Discord timestamp
             unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())

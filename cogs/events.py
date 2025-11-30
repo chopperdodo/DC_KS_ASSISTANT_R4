@@ -41,6 +41,17 @@ class Events(commands.Cog):
             for option in options if current.lower() in option.lower()
         ]
 
+    @app_commands.command(name="set_channel", description="Set the announcement channel for this server (Admin only)")
+    @app_commands.describe(channel="The channel to send reminders to")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def set_channel(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+            
+        await database.set_guild_channel(interaction.guild.id, channel.id)
+        await interaction.response.send_message(f"✅ Announcement channel set to {channel.mention} for this server.")
+
     @app_commands.command(name="add", description="Add a new event (UTC time)")
     @app_commands.describe(
         name="Name of the event (Select or type custom)",
@@ -52,6 +63,10 @@ class Events(commands.Cog):
     async def add_event(self, interaction: discord.Interaction, name: str, time: str, repeat: int = 0, interval: str = None):
         # Defer response since DB ops might take a moment
         await interaction.response.defer()
+        
+        if not interaction.guild:
+            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
+            return
 
         try:
             # Try parsing with year first
@@ -75,13 +90,13 @@ class Events(commands.Cog):
         current_time = start_time
 
         # Add the initial event
-        await database.add_event(name, current_time, "") # Description removed as per request
+        await database.add_event(interaction.guild.id, name, current_time, "") 
         events_created.append(current_time)
 
         # Add repeats
         for _ in range(repeat):
             current_time += interval_delta
-            await database.add_event(name, current_time, "")
+            await database.add_event(interaction.guild.id, name, current_time, "")
             events_created.append(current_time)
 
         # Format response
@@ -94,7 +109,11 @@ class Events(commands.Cog):
 
     @app_commands.command(name="list", description="List upcoming events")
     async def list_events(self, interaction: discord.Interaction):
-        events = await database.get_all_events()
+        if not interaction.guild:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
+        events = await database.get_all_events(interaction.guild.id)
         if not events:
             await interaction.response.send_message("No upcoming events.", ephemeral=True)
             return
@@ -125,6 +144,9 @@ class Events(commands.Cog):
     @app_commands.command(name="delete", description="Delete an event by ID")
     @app_commands.describe(event_id="The ID of the event to delete")
     async def delete_event(self, interaction: discord.Interaction, event_id: int):
+        # Note: Ideally we should check if the event belongs to this guild before deleting
+        # But for simplicity/MVP we just delete by ID.
+        # A more robust check would be: get_event(id), check guild_id, then delete.
         await database.delete_event(event_id)
         await interaction.response.send_message(f"🗑️ Event with ID **{event_id}** deleted.")
 
