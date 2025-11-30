@@ -86,8 +86,9 @@ class Scheduler(commands.Cog):
                 await channel.send(
                     f"@everyone\n"
                     f"**{event['name']}** happens in 30 mins\n"
-                    f"at time: {utc_str} UTC\n"
-                    f"your local timezone: <t:{unix_ts}:F>"
+                    f"**{event['name']}** 將於 30 分鐘後開始\n"
+                    f"at time / 時間: {utc_str} UTC\n"
+                    f"your local timezone / 您的當地時間: <t:{unix_ts}:F>"
                 )
                 await database.mark_reminder_sent(event['id'], "30")
                 print(f"  ✅ [REMINDER] 30-minute reminder sent!")
@@ -99,9 +100,11 @@ class Scheduler(commands.Cog):
                 await channel.send(
                     f"@everyone\n"
                     f"Hurry up\n"
+                    f"快點！\n"
                     f"**{event['name']}** happens in 5 mins\n"
-                    f"at time: {utc_str} UTC\n"
-                    f"your local timezone: <t:{unix_ts}:F>"
+                    f"**{event['name']}** 將於 5 分鐘後開始\n"
+                    f"at time / 時間: {utc_str} UTC\n"
+                    f"your local timezone / 您的當地時間: <t:{unix_ts}:F>"
                 )
                 await database.mark_reminder_sent(event['id'], "5")
                 print(f"  ✅ [REMINDER] 5-minute reminder sent!")
