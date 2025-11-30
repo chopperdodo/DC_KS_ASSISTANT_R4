@@ -82,7 +82,15 @@ class Scheduler(commands.Cog):
             # 5 minute reminder
             elif 0 < minutes_diff <= 5 and not event['reminder_5_sent']:
                 print(f"  🔔 [REMINDER] Sending 5-minute reminder for '{event['name']}'")
-                await channel.send(f"@everyone 🚨 **Hurry Up!**\n**{event['name']}** is starting in 5 minutes!\n{event['description']}")
+                
+                # Create Discord timestamp
+                unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())
+
+                await channel.send(
+                    f"@everyone 🚨 **Hurry Up!**\n"
+                    f"**{event['name']}** is starting in 5 minutes!\n"
+                    f"🕒 Time: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
+                )
                 await database.mark_reminder_sent(event['id'], "5")
                 print(f"  ✅ [REMINDER] 5-minute reminder sent!")
             else:

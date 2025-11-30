@@ -19,45 +19,74 @@ class Events(commands.Cog):
         Add an event. Format: !event add "Name" "YYYY-MM-DD HH:MM" "Description"
         """
         try:
-            event_time = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            # Parse base time as UTC
+            start_time = datetime.datetime.strptime(time, "%Y-%m-%d %H:%M")
+            # Ensure it's treated as UTC (though naive datetime is fine if we are consistent)
         except ValueError:
-            await ctx.send("Invalid time format. Please use YYYY-MM-DD HH:MM")
+            await interaction.followup.send("Invalid time format. Please use `YYYY-MM-DD HH:MM` (e.g., 2025-11-30 13:00)", ephemeral=True)
             return
 
-        await database.add_event(name, event_time, description)
-        await ctx.send(f"Event '{name}' added for {event_time}!")
+        interval_delta = self.parse_interval(interval)
+        if repeat > 0 and not interval_delta:
+            await interaction.followup.send("If you specify repeats, you must provide a valid interval (e.g., `1d`, `12h`).", ephemeral=True)
+            return
 
-    @event.command(name="list")
-    async def list_events(self, ctx):
+        events_created = []
+        current_time = start_time
+
+        # Add the initial event
+        await database.add_event(name, current_time, "") # Description removed as per request
+        events_created.append(current_time)
+
+        # Add repeats
+        for _ in range(repeat):
+            current_time += interval_delta
+            await database.add_event(name, current_time, "")
+            events_created.append(current_time)
+
+        # Format response
+        msg = f"✅ Created **{len(events_created)}** event(s) for **{name}** starting at `{start_time} UTC`."
+        if repeat > 0:
+            msg += f"\nRepeats: {repeat} times, Interval: {interval}"
+            msg += f"\nLast event: `{events_created[-1]} UTC`"
+        
+        await interaction.followup.send(msg)
+
+    @app_commands.command(name="list", description="List upcoming events")
+    async def list_events(self, interaction: discord.Interaction):
         events = await database.get_all_events()
         if not events:
-            await ctx.send("No upcoming events.")
+            await interaction.response.send_message("No upcoming events.", ephemeral=True)
             return
 
-        embed = discord.Embed(title="Upcoming Events", color=discord.Color.blue())
-        for event in events:
-            # event is a Row object, can access by name
+        embed = discord.Embed(title="📅 Upcoming Events", color=discord.Color.blue())
+        
+        # Limit to 25 fields (Discord limit)
+        for event in events[:25]:
+            # Convert string time to datetime
+            try:
+                dt = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                # Fallback
+                dt = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:00")
+            
+            # Create Discord timestamp (Unix timestamp)
+            # Assuming stored time is UTC
+            unix_ts = int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+            
             embed.add_field(
                 name=f"{event['name']} (ID: {event['id']})",
-                value=f"Time: {event['event_time']}\n{event['description']}",
+                value=f"🕒 <t:{unix_ts}:F> (<t:{unix_ts}:R>)",
                 inline=False
             )
-        await ctx.send(embed=embed)
+        
+        await interaction.response.send_message(embed=embed)
 
-    @event.command(name="delete")
-    @commands.has_permissions(administrator=True)
-    async def delete_event(self, ctx, event_id: int):
+    @app_commands.command(name="delete", description="Delete an event by ID")
+    @app_commands.describe(event_id="The ID of the event to delete")
+    async def delete_event(self, interaction: discord.Interaction, event_id: int):
         await database.delete_event(event_id)
-        await ctx.send(f"Event with ID {event_id} deleted.")
-
-    @commands.command()
-    @commands.has_permissions(administrator=True)
-    async def set_channel(self, ctx, channel: discord.TextChannel):
-        """Sets the announcement channel."""
-        self.bot.announcement_channel_id = channel.id
-        # In a real app, save this to DB or config file so it persists restart
-        # For now, we'll just keep it in memory or rely on .env default
-        await ctx.send(f"Announcement channel set to {channel.mention}")
+        await interaction.response.send_message(f"🗑️ Event with ID **{event_id}** deleted.")
 
 async def setup(bot):
     await bot.add_cog(Events(bot))
