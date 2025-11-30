@@ -1,23 +1,45 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
 import datetime
 import database
+import re
 
 class Events(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
-        self.announcement_channel_id = None
 
-    @commands.group(invoke_without_command=True)
-    async def event(self, ctx):
-        await ctx.send("Available commands: `!event add`, `!event list`, `!event delete`")
+    def parse_interval(self, interval_str: str) -> datetime.timedelta:
+        """Parses a string like '2d', '12h', '30m' into a timedelta."""
+        if not interval_str:
+            return None
+        
+        match = re.match(r"(\d+)([dhm])", interval_str.lower())
+        if not match:
+            return None
+        
+        amount = int(match.group(1))
+        unit = match.group(2)
+        
+        if unit == 'd':
+            return datetime.timedelta(days=amount)
+        elif unit == 'h':
+            return datetime.timedelta(hours=amount)
+        elif unit == 'm':
+            return datetime.timedelta(minutes=amount)
+        return None
 
-    @event.command(name="add")
-    @commands.has_permissions(administrator=True) # Or check for specific role
-    async def add_event(self, ctx, name: str, time_str: str, *, description: str):
-        """
-        Add an event. Format: !event add "Name" "YYYY-MM-DD HH:MM" "Description"
-        """
+    @app_commands.command(name="add", description="Add a new event (UTC time)")
+    @app_commands.describe(
+        name="Name of the event",
+        time="Time in UTC (YYYY-MM-DD HH:MM)",
+        repeat="Number of times to repeat (optional)",
+        interval="Interval between repeats e.g. 2d, 1w, 12h (optional)"
+    )
+    async def add_event(self, interaction: discord.Interaction, name: str, time: str, repeat: int = 0, interval: str = None):
+        # Defer response since DB ops might take a moment
+        await interaction.response.defer()
+
         try:
             # Parse base time as UTC
             start_time = datetime.datetime.strptime(time, "%Y-%m-%d %H:%M")

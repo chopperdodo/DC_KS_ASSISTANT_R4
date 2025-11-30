@@ -75,7 +75,15 @@ class Scheduler(commands.Cog):
             # 30 minute reminder (check if between 25 and 35 mins to be safe)
             if 25 <= minutes_diff <= 35 and not event['reminder_30_sent']:
                 print(f"  🔔 [REMINDER] Sending 30-minute reminder for '{event['name']}'")
-                await channel.send(f"@everyone 📢 **Event Reminder!**\n**{event['name']}** is starting in ~30 minutes!\n{event['description']}")
+                
+                # Create Discord timestamp
+                unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())
+                
+                await channel.send(
+                    f"@everyone 📢 **Event Reminder!**\n"
+                    f"**{event['name']}** is starting in ~30 minutes!\n"
+                    f"🕒 Time: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
+                )
                 await database.mark_reminder_sent(event['id'], "30")
                 print(f"  ✅ [REMINDER] 30-minute reminder sent!")
             
