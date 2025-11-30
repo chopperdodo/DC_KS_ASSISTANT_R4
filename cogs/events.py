@@ -29,13 +29,26 @@ class Events(commands.Cog):
             return datetime.timedelta(minutes=amount)
         return None
 
+    async def name_autocomplete(self, interaction: discord.Interaction, current: str) -> list[app_commands.Choice[str]]:
+        options = [
+            "Bear-1", "Bear-2",
+            "Swordland-legion-1", "Swordland-legion-2",
+            "Tri-alliance-legion-1", "Tri-alliance-legion-2",
+            "Castle-Battle"
+        ]
+        return [
+            app_commands.Choice(name=option, value=option)
+            for option in options if current.lower() in option.lower()
+        ]
+
     @app_commands.command(name="add", description="Add a new event (UTC time)")
     @app_commands.describe(
-        name="Name of the event",
+        name="Name of the event (Select or type custom)",
         time="Time in UTC (YYYY-MM-DD HH:MM)",
         repeat="Number of times to repeat (optional)",
         interval="Interval between repeats e.g. 2d, 1w, 12h (optional)"
     )
+    @app_commands.autocomplete(name=name_autocomplete)
     async def add_event(self, interaction: discord.Interaction, name: str, time: str, repeat: int = 0, interval: str = None):
         # Defer response since DB ops might take a moment
         await interaction.response.defer()
