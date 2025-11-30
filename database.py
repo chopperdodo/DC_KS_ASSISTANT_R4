@@ -59,3 +59,10 @@ async def mark_reminder_sent(event_id: int, reminder_type: str):
         elif reminder_type == "5":
             await db.execute("UPDATE events SET reminder_5_sent = 1 WHERE id = ?", (event_id,))
         await db.commit()
+
+async def delete_old_events():
+    """Deletes events that are more than 24 hours past their start time."""
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=1)
+    async with aiosqlite.connect(DB_NAME) as db:
+        await db.execute("DELETE FROM events WHERE event_time < ?", (cutoff,))
+        await db.commit()

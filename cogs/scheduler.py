@@ -48,6 +48,9 @@ class Scheduler(commands.Cog):
         if len(events) == 0:
             print("ℹ️ [SCHEDULER] No events need reminders at this time")
 
+        # Auto-cleanup old events
+        await database.delete_old_events()
+
         for event in events:
             # event_time is a string in ISO format (or whatever sqlite stores)
             # aiosqlite/sqlite3 default timestamp is usually string "YYYY-MM-DD HH:MM:SS"
@@ -72,17 +75,19 @@ class Scheduler(commands.Cog):
             print(f"     30-min reminder sent: {bool(event['reminder_30_sent'])}")
             print(f"     5-min reminder sent: {bool(event['reminder_5_sent'])}")
 
+            # Create Discord timestamp
+            unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())
+            utc_str = event_time.strftime('%Y-%m-%d %H:%M')
+
             # 30 minute reminder (check if between 25 and 35 mins to be safe)
             if 25 <= minutes_diff <= 35 and not event['reminder_30_sent']:
                 print(f"  🔔 [REMINDER] Sending 30-minute reminder for '{event['name']}'")
                 
-                # Create Discord timestamp
-                unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())
-                
                 await channel.send(
-                    f"@everyone 📢 **Event Reminder!**\n"
-                    f"**{event['name']}** is starting in ~30 minutes!\n"
-                    f"🕒 Time: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
+                    f"@everyone\n"
+                    f"**{event['name']}** happens in 30 mins\n"
+                    f"at time: {utc_str} UTC\n"
+                    f"your local timezone: <t:{unix_ts}:F>"
                 )
                 await database.mark_reminder_sent(event['id'], "30")
                 print(f"  ✅ [REMINDER] 30-minute reminder sent!")
@@ -91,13 +96,12 @@ class Scheduler(commands.Cog):
             elif 0 < minutes_diff <= 5 and not event['reminder_5_sent']:
                 print(f"  🔔 [REMINDER] Sending 5-minute reminder for '{event['name']}'")
                 
-                # Create Discord timestamp
-                unix_ts = int(event_time.replace(tzinfo=datetime.timezone.utc).timestamp())
-
                 await channel.send(
-                    f"@everyone 🚨 **Hurry Up!**\n"
-                    f"**{event['name']}** is starting in 5 minutes!\n"
-                    f"🕒 Time: <t:{unix_ts}:F> (<t:{unix_ts}:R>)"
+                    f"@everyone\n"
+                    f"Hurry up\n"
+                    f"**{event['name']}** happens in 5 mins\n"
+                    f"at time: {utc_str} UTC\n"
+                    f"your local timezone: <t:{unix_ts}:F>"
                 )
                 await database.mark_reminder_sent(event['id'], "5")
                 print(f"  ✅ [REMINDER] 5-minute reminder sent!")
