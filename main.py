@@ -16,6 +16,17 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 # Global variable to store channel ID (can be updated at runtime)
 bot.announcement_channel_id = os.getenv("ANNOUNCEMENT_CHANNEL_ID")
 
+@bot.command()
+async def sync(ctx):
+    """Syncs slash commands to the current guild for instant updates."""
+    try:
+        # Sync to the current guild (instant)
+        bot.tree.copy_global_to(guild=ctx.guild)
+        synced = await bot.tree.sync(guild=ctx.guild)
+        await ctx.send(f"✅ Synced {len(synced)} command(s) to this server!")
+    except Exception as e:
+        await ctx.send(f"❌ Failed to sync: {e}")
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
