@@ -18,7 +18,12 @@ async def init_db():
                 event_time TIMESTAMP NOT NULL,
                 description TEXT,
                 reminder_30_sent BOOLEAN DEFAULT 0,
-                reminder_5_sent BOOLEAN DEFAULT 0
+                reminder_5_sent BOOLEAN DEFAULT 0,
+                event_type TEXT DEFAULT 'General',
+                coordinates TEXT,
+                repeat_config TEXT,
+                icon_url TEXT,
+                color_hex INTEGER
             )
         """)
         
@@ -30,11 +35,15 @@ async def init_db():
             )
         """)
         
-        # Migration: Add guild_id column if it doesn't exist (for existing DBs)
+        # Migration: Add columns if they don't exist (basic migration)
         try:
-            await db.execute("ALTER TABLE events ADD COLUMN guild_id INTEGER")
+            await db.execute("ALTER TABLE events ADD COLUMN event_type TEXT DEFAULT 'General'")
+            await db.execute("ALTER TABLE events ADD COLUMN coordinates TEXT")
+            await db.execute("ALTER TABLE events ADD COLUMN repeat_config TEXT")
+            await db.execute("ALTER TABLE events ADD COLUMN icon_url TEXT")
+            await db.execute("ALTER TABLE events ADD COLUMN color_hex INTEGER")
         except Exception:
-            pass # Column likely exists
+            pass # Columns likely exist or partial failure (SQLite simple migration)
             
         await db.commit()
 
@@ -52,11 +61,15 @@ async def get_guild_channel(guild_id: int):
             row = await cursor.fetchone()
             return row[0] if row else None
 
-async def add_event(guild_id: int, name: str, event_time: datetime.datetime, description: str):
+async def add_event(guild_id: int, name: str, event_time: datetime.datetime, description: str, 
+                    event_type: str = "General", coordinates: str = None, 
+                    repeat_config: str = None, icon_url: str = None, color_hex: int = None):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
-            "INSERT INTO events (guild_id, name, event_time, description) VALUES (?, ?, ?, ?)",
-            (guild_id, name, event_time, description)
+            """INSERT INTO events 
+               (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex)
         )
         await db.commit()
 
@@ -101,8 +114,9 @@ async def mark_reminder_sent(event_id: int, reminder_type: str):
         await db.commit()
 
 async def delete_old_events():
-    """Deletes events that are more than 24 hours past their start time."""
-    cutoff = datetime.datetime.now() - datetime.timedelta(days=1)
+    """Deletes events that are more than 1 hour past their start time."""
+    # Use naive UTC to match SQLite default string format
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=1)
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute("DELETE FROM events WHERE event_time < ?", (cutoff,))
         await db.commit()

@@ -18,8 +18,7 @@ if [ ! -d "venv" ]; then
     if ! $PYTHON_CMD -m venv venv; then
         echo ""
         echo "❌ Error: Failed to create virtual environment."
-        echo "It looks like you are on Ubuntu/Debian. You need to install the venv package:"
-        echo "👉 sudo apt install python3-venv"
+        echo "Please ensure you have python3-venv installed or a full Python installation."
         exit 1
     fi
 fi
