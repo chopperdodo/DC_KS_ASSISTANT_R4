@@ -1,29 +1,29 @@
 import aiosqlite
 import datetime
 import os
+from constants import EventConfig
 
-DB_NAME = "kingshot.db"
+DB_NAME = "scheduler.db"
 
 async def init_db():
     async with aiosqlite.connect(DB_NAME) as db:
-        # Enable foreign keys
-        await db.execute("PRAGMA foreign_keys = ON")
         
         # Events table with guild_id
         await db.execute("""
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 guild_id INTEGER,
-                name TEXT NOT NULL,
-                event_time TIMESTAMP NOT NULL,
+                name TEXT,
+                event_time TIMESTAMP,
                 description TEXT,
-                reminder_30_sent BOOLEAN DEFAULT 0,
-                reminder_5_sent BOOLEAN DEFAULT 0,
-                event_type TEXT DEFAULT 'General',
-                coordinates TEXT,
-                repeat_config TEXT,
+                reminder_30_sent INTEGER DEFAULT 0,
+                reminder_5_sent INTEGER DEFAULT 0,
+                event_type TEXT, -- 'Bear', 'Castle', etc.
+                coordinates TEXT, -- '123,456'
+                repeat_config TEXT, -- '1d', '7d', 'None'
                 icon_url TEXT,
-                color_hex INTEGER
+                color_hex INTEGER,
+                duration INTEGER DEFAULT 0 -- Duration in minutes
             )
         """)
         
@@ -31,46 +31,62 @@ async def init_db():
         await db.execute("""
             CREATE TABLE IF NOT EXISTS guild_settings (
                 guild_id INTEGER PRIMARY KEY,
-                channel_id INTEGER
+                announcement_channel_id INTEGER
             )
         """)
         
-        # Migration: Add columns if they don't exist (basic migration)
-        try:
-            await db.execute("ALTER TABLE events ADD COLUMN event_type TEXT DEFAULT 'General'")
-            await db.execute("ALTER TABLE events ADD COLUMN coordinates TEXT")
-            await db.execute("ALTER TABLE events ADD COLUMN repeat_config TEXT")
-            await db.execute("ALTER TABLE events ADD COLUMN icon_url TEXT")
-            await db.execute("ALTER TABLE events ADD COLUMN color_hex INTEGER")
-        except Exception:
-            pass # Columns likely exist or partial failure (SQLite simple migration)
+        # MIGRATION: Add columns if they don't exist (SQLite doesn't support IF NOT EXISTS for columns easily)
+        # We try to add them and ignore error if they exist.
+        columns_to_add = [
+            ("event_type", "TEXT"),
+            ("coordinates", "TEXT"),
+            ("repeat_config", "TEXT"),
+            ("icon_url", "TEXT"),
+            ("color_hex", "INTEGER"),
+            ("duration", "INTEGER DEFAULT 0")
+        ]
+        
+        for col_name, col_type in columns_to_add:
+            try:
+                await db.execute(f"ALTER TABLE events ADD COLUMN {col_name} {col_type}")
+                print(f"⚠️ Migrated DB: Added {col_name} column.")
+            except Exception as e:
+                # Column likely exists
+                pass
+
+        # DATA MIGRATION: Backfill duration for existing events
+        # We iterate known event types and update duration where it is 0
+        for name, data in EventConfig.EVENTS.items():
+            duration = data.get("duration", 0)
+            if duration > 0:
+                # Update for main name
+                await db.execute("UPDATE events SET duration = ? WHERE (name = ? OR event_type = ?) AND (duration IS NULL OR duration = 0)", (duration, name, name))
+                # Update for legacy keys
+                for key in data.get("legacy_keys", []):
+                     await db.execute("UPDATE events SET duration = ? WHERE (name LIKE ? OR event_type = ?) AND (duration IS NULL OR duration = 0)", (duration, f"%{key}%", key))
             
         await db.commit()
 
 async def set_guild_channel(guild_id: int, channel_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
         await db.execute(
-            "INSERT OR REPLACE INTO guild_settings (guild_id, channel_id) VALUES (?, ?)",
+            "INSERT OR REPLACE INTO guild_settings (guild_id, announcement_channel_id) VALUES (?, ?)",
             (guild_id, channel_id)
         )
         await db.commit()
 
 async def get_guild_channel(guild_id: int):
     async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)) as cursor:
+        async with db.execute("SELECT announcement_channel_id FROM guild_settings WHERE guild_id = ?", (guild_id,)) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else None
 
-async def add_event(guild_id: int, name: str, event_time: datetime.datetime, description: str, 
-                    event_type: str = "General", coordinates: str = None, 
-                    repeat_config: str = None, icon_url: str = None, color_hex: int = None):
+async def add_event(guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex, duration=0):
     async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            """INSERT INTO events 
-               (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex) 
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex)
-        )
+        await db.execute("""
+            INSERT INTO events (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex, duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (guild_id, name, event_time, description, event_type, coordinates, repeat_config, icon_url, color_hex, duration))
         await db.commit()
 
 async def get_all_events(guild_id: int = None):

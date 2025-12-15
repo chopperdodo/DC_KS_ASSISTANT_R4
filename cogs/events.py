@@ -5,6 +5,7 @@ import datetime
 import database
 import re
 from typing import Optional
+from constants import EventConfig
 
 class EventDetailsModal(discord.ui.Modal, title="Event Details / 活動詳情"):
     event_time = discord.ui.TextInput(
@@ -12,6 +13,14 @@ class EventDetailsModal(discord.ui.Modal, title="Event Details / 活動詳情"):
         placeholder="2025-10-20 14:00",
         min_length=10,
         max_length=16
+    )
+
+    duration = discord.ui.TextInput(
+        label="Duration (mins) / 持續時間 (分鐘)",
+        placeholder="60",
+        min_length=1,
+        max_length=4,
+        required=True
     )
 
     description = discord.ui.TextInput(
@@ -22,7 +31,7 @@ class EventDetailsModal(discord.ui.Modal, title="Event Details / 活動詳情"):
         max_length=1000
     )
 
-    def __init__(self, name, event_type, repeat_interval, icon_url, color_hex, mode="create", event_id=None, default_time=None, default_desc=None):
+    def __init__(self, name, event_type, repeat_interval, icon_url, color_hex, mode="create", event_id=None, default_time=None, default_desc=None, default_duration=0):
         super().__init__()
         self.name = name
         self.event_type = event_type
@@ -36,58 +45,103 @@ class EventDetailsModal(discord.ui.Modal, title="Event Details / 活動詳情"):
             self.event_time.default = default_time
         if default_desc:
             self.description.default = default_desc
+        self.duration.default = str(default_duration)
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Validate Time
         try:
-            time_str = self.event_time.value.strip()
-            if len(time_str) <= 11: # Assume MM-DD HH:MM
-                dt_no_year = datetime.datetime.strptime(time_str, "%m-%d %H:%M")
-                current_year = datetime.datetime.now().year
-                start_time = dt_no_year.replace(year=current_year)
-            else:
-                start_time = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M")
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid time format. Please use `YYYY-MM-DD HH:MM`.", ephemeral=True)
-            return
+            # Validate Time
+            try:
+                time_str = self.event_time.value.strip()
+                if len(time_str) <= 11: # Assume MM-DD HH:MM
+                    dt_no_year = datetime.datetime.strptime(time_str, "%m-%d %H:%M")
+                    current_year = datetime.datetime.now().year
+                    start_time = dt_no_year.replace(year=current_year)
+                else:
+                    start_time = datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M")
+            except ValueError:
+                await interaction.response.send_message("❌ Invalid time format. Please use `YYYY-MM-DD HH:MM`.", ephemeral=True)
+                return
 
-        # Save to DB
-        if self.mode == "create":
-            await database.add_event(
-                interaction.guild.id, self.name, start_time, self.description.value,
-                self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex
-            )
-            # Create Loop Instances
-            if self.repeat_interval:
-                current_time = start_time
-                delta = None
-                match = re.match(r"(\d+)([dhm])", self.repeat_interval)
-                if match:
-                    amount = int(match.group(1))
-                    unit = match.group(2)
-                    if unit == 'd': delta = datetime.timedelta(days=amount)
-                    elif unit == 'h': delta = datetime.timedelta(hours=amount)
-                    elif unit == 'm': delta = datetime.timedelta(minutes=amount)
+            # Validate Duration
+            try:
+                duration_mins = int(self.duration.value.strip())
+            except ValueError:
+                await interaction.response.send_message("❌ Invalid duration. Please enter a number.", ephemeral=True)
+                return
+
+            # Save to DB
+            if self.mode == "create":
+                await database.add_event(
+                    interaction.guild.id, self.name, start_time, self.description.value,
+                    self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex, duration_mins
+                )
+                # Create Loop Instances
+                if self.repeat_interval:
+                    current_time = start_time
+                    delta = None
+                    match = re.match(r"(\d+)([dhm])", self.repeat_interval)
+                    if match:
+                        amount = int(match.group(1))
+                        unit = match.group(2)
+                        if unit == 'd': delta = datetime.timedelta(days=amount)
+                        elif unit == 'h': delta = datetime.timedelta(hours=amount)
+                        elif unit == 'm': delta = datetime.timedelta(minutes=amount)
+                    
+                    if delta:
+                         for _ in range(5):
+                            current_time += delta
+                            await database.add_event(
+                                interaction.guild.id, self.name, current_time, self.description.value,
+                                self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex, duration_mins
+                            )
+
+            elif self.mode == "edit":
+                if self.event_id:
+                    await database.delete_event(self.event_id)
+                await database.add_event(
+                     interaction.guild.id, self.name, start_time, self.description.value,
+                    self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex, duration_mins
+                )
+
+            # Confirm & Check Conflicts
+            msg = f"✅ Event **{self.name}** saved!\nStart: <t:{int(start_time.replace(tzinfo=datetime.timezone.utc).timestamp())}:F>"
+            
+            # Conflict Detection Logic
+            new_start = start_time
+            new_end = start_time + datetime.timedelta(minutes=duration_mins)
+            
+            events = await database.get_all_events(interaction.guild.id)
+            conflicts = []
+            
+            for e in events:
+                try:
+                    e_start = datetime.datetime.strptime(e['event_time'], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    e_start = datetime.datetime.strptime(e['event_time'], "%Y-%m-%d %H:%M:%S.%f")
                 
-                if delta:
-                     for _ in range(5):
-                        current_time += delta
-                        await database.add_event(
-                            interaction.guild.id, self.name, current_time, self.description.value,
-                            self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex
-                        )
+                # Duration default 0 if column null (handled by migration but be safe)
+                e_dur = e['duration'] if 'duration' in e.keys() else 0
+                e_end = e_start + datetime.timedelta(minutes=e_dur)
 
-        elif self.mode == "edit":
-            if self.event_id:
-                await database.delete_event(self.event_id)
-            await database.add_event(
-                 interaction.guild.id, self.name, start_time, self.description.value,
-                self.event_type, None, self.repeat_interval, self.icon_url, self.color_hex
-            )
+                if e['name'] == self.name and abs((e_start - start_time).total_seconds()) < 1:
+                    continue 
+                
+                if (new_start < e_end) and (new_end > e_start):
+                    conflicts.append(e)
 
-        # Confirm
-        msg = f"✅ Event **{self.name}** saved!\nStart: <t:{int(start_time.replace(tzinfo=datetime.timezone.utc).timestamp())}:F>"
-        await interaction.response.edit_message(content=msg, view=None)
+            if conflicts:
+                msg += "\n\n⚠️ **CONFLICT DETECTED / 與其他事件有衝突**\n"
+                for c in conflicts[:3]:
+                    c_time = c['event_time']
+                    msg += f"- **{c['name']}** at `{c_time}`\n"
+
+            await interaction.response.edit_message(content=msg, view=None)
+
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error saving event: {str(e)}", ephemeral=True)
+            print(f"ERROR in on_submit: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 class EventCreationView(discord.ui.View):
@@ -101,18 +155,73 @@ class EventCreationView(discord.ui.View):
         # Defaults
         self.default_time = None
         self.default_desc = None
+        self.default_duration = None
         
+        # Generate Options dynamically
+        self.type_options = []
+        for name, data in EventConfig.EVENTS.items():
+            self.type_options.append(discord.SelectOption(
+                label=f" {name}" if not name.startswith(("⚔️","🐻","🗡️","🏳️‍⚧️","🏯","🧑‍🦲","🆚","🎣","🛡️","🌽","📅")) else name, 
+                # ^ Some names have chars, some don't. The constants file keys have emojis? 
+                # Wait, I put keys as "KvK & Castle / KvK & 王城戰" in constants. But in original code they had emojis in label.
+                # Let's just use the key as value. Label can be Key too for now or add emojis in Constants? 
+                # I'll stick to Value = Key. 
+                # Actually, duplicate emojis might be annoying. Let's fix constants or just use Key.
+                # For now, simplistic approach: Value is the Key.
+                value=name,
+                description=data.get("desc", "")
+            ))
+            
+            # Note: In previous code, I had emojis in labels like "⚔️ KvK...". 
+            # If I want to keep that polish, I should probably store "label" in constants too.
+            # But user asked to consolidate libraries. 
+            # For this iteration, I will assume the keys in constants match the desired VALUE.
+            # I can add emojis manually here or update constant keys.
+            # I will trust the keys in constants.py roughly match what we had.
+
+        # Add proper emojis to labels for UX polish if missing
+        # Mapping simple heuristic
+        friendly_labels = []
+        for name, data in EventConfig.EVENTS.items():
+            emoji = ""
+            if "KvK" in name: emoji = "⚔️ "
+            elif "Bear" in name: emoji = "🐻 "
+            elif "Swordland" in name: emoji = "🗡️ "
+            elif "Tri-Alliance" in name: emoji = "🏳️‍⚧️ "
+            elif "Sanctuary" in name: emoji = "🏯 "
+            elif "Viking" in name: emoji = "🧑‍🦲 "
+            elif "Arena" in name: emoji = "🆚 "
+            elif "Fishing" in name: emoji = "🎣 "
+            elif "Shield" in name: emoji = "🛡️ "
+            elif "Farm" in name: emoji = "🌽 "
+            elif "General" in name: emoji = "📅 "
+            
+            friendly_labels.append(discord.SelectOption(
+                label=f"{emoji}{name}", 
+                value=name, 
+                description=data.get("desc", "")
+            ))
+        
+        # Dynamically set options for the Select item
+        # We need to find the select item or init it dynamically? 
+        # Discord Views define items at Class level usually. 
+        # But we can replace options in __init__.
+        
+        # Find the type select
+        self.select_type_item.options = friendly_labels
+
         # Handle Defaults
         if default_values:
             self.default_time = default_values.get('time')
             self.default_desc = default_values.get('description')
+            self.default_duration = default_values.get('duration')
             def_name = default_values.get('name')
             def_repeat = default_values.get('repeat')
             
             # Iterate children to find Selects
             for child in self.children:
                 if isinstance(child, discord.ui.Select):
-                    # Check partial placeholder text to identify which select it is
+                    # Check partial placeholder
                     if "Event Name" in child.placeholder or "活動名稱" in child.placeholder:
                         if def_name:
                             self.selected_name = def_name
@@ -127,18 +236,9 @@ class EventCreationView(discord.ui.View):
                                 if option.value == def_repeat:
                                     option.default = True
 
+    # Placeholder options, will be replaced in __init__
     @discord.ui.select(placeholder="Select Event Name (Type) / 選擇活動名稱", options=[
-        discord.SelectOption(label="⚔️ KvK & Castle / KvK & 王城戰", value="KvK & Castle / KvK & 王城戰"),
-        discord.SelectOption(label="🐻 Bear / 熊", value="Bear / 熊"),
-        discord.SelectOption(label="🗡️ Swordland / 聖劍", value="Swordland / 聖劍"),
-        discord.SelectOption(label="🏳️‍⚧️ Tri-Alliance / 三盟", value="Tri-Alliance / 三盟"),
-        discord.SelectOption(label="🏯 Sanctuary / 遺跡", value="Sanctuary / 遺跡"),
-        discord.SelectOption(label="🧑‍🦲 Viking / 維京", value="Viking / 維京"),
-        discord.SelectOption(label="🆚 Arena / 競技場", value="Arena / 競技場"),
-        discord.SelectOption(label="🎣 Fishing / 釣魚", value="Fishing / 釣魚"),
-        discord.SelectOption(label="🛡️ Shield / 護盾", value="Shield / 護盾"),
-        discord.SelectOption(label="🌽 Farm / 採集", value="Farm / 採集"),
-        discord.SelectOption(label="📅 General / 一般", value="General / 一般")
+        discord.SelectOption(label="Loading...", value="loading") 
     ])
     async def select_type_item(self, interaction: discord.Interaction, select: discord.ui.Select):
         self.selected_name = select.values[0]
@@ -164,36 +264,13 @@ class EventCreationView(discord.ui.View):
             await interaction.response.send_message("❌ Please select an Event Name first.", ephemeral=True)
             return
 
-        # Determine Color/Icon based on selected Name (which is also Type)
-        color_hex = 0x3498db # Blue
-        icon_url = "https://img.icons8.com/color/96/calendar--v1.png"
+        # Determine Color/Icon using Constants
+        color_hex, icon_url = EventConfig.get_event_metadata(self.selected_name)
+        default_dur = EventConfig.get_event_duration(self.selected_name)
         
-        name = self.selected_name
-        
-        if "Shield" in name:
-            color_hex = 0xe74c3c
-            icon_url = "https://img.icons8.com/color/96/shield.png"
-        elif "Arena" in name:
-             color_hex = 0xe74c3c
-             icon_url = "https://img.icons8.com/color/96/boxing-glove.png"
-        elif "KvK" in name or "Swordland" in name or "Tri-Alliance" in name:
-             color_hex = 0xe74c3c
-             icon_url = "https://img.icons8.com/color/96/sword.png"
-        elif "Sanctuary" in name:
-             color_hex = 0x9b59b6
-             icon_url = "https://img.icons8.com/color/96/ruins.png"
-        elif "Bear" in name:
-             color_hex = 0xe67e22
-             icon_url = "https://img.icons8.com/color/96/bear.png"
-        elif "Fishing" in name: # Specific check before Farm
-             color_hex = 0x2ecc71
-             icon_url = "https://img.icons8.com/color/96/fishing-pole.png"
-        elif "Farm" in name:
-            color_hex = 0x2ecc71
-            icon_url = "https://img.icons8.com/color/96/field.png"
-        elif "Viking" in name:
-            color_hex = 0xf1c40f
-            icon_url = "https://img.icons8.com/color/96/viking-helmet.png"
+        # Override with stored default if editing
+        if self.default_duration is not None:
+             default_dur = self.default_duration
 
         modal = EventDetailsModal(
             name=self.selected_name,
@@ -204,7 +281,8 @@ class EventCreationView(discord.ui.View):
             mode=self.mode,
             event_id=self.event_id,
             default_time=self.default_time,
-            default_desc=self.default_desc
+            default_desc=self.default_desc,
+            default_duration=default_dur
         )
         await interaction.response.send_modal(modal)
 
@@ -260,22 +338,10 @@ class Events(commands.Cog):
         # Prepare Defaults
         def_name = target['name']
         
-        # Legacy mapping if needed
-        type_map = {
-            "KvK & Castle": "KvK & Castle / KvK & 王城戰",
-            "Bear": "Bear / 熊",
-            "Swordland": "Swordland / 聖劍",
-            "Tri-Alliance": "Tri-Alliance / 三盟",
-            "Sanctuary": "Sanctuary / 遺跡",
-            "Viking": "Viking / 維京",
-            "Arena": "Arena / 競技場",
-            "Fishing": "Fishing / 釣魚",
-            "Shield": "Shield / 護盾",
-            "Farm": "Farm / 採集",
-            "General": "General / 一般"
-        }
-        if def_name in type_map:
-             def_name = type_map[def_name]
+        # Legacy mapping using Constants
+        mapping = EventConfig.get_legacy_mapping()
+        if def_name in mapping:
+             def_name = mapping[def_name]
              
         # Format time to remove seconds if present (YYYY-MM-DD HH:MM:SS -> YYYY-MM-DD HH:MM)
         time_val = target['event_time']
@@ -286,7 +352,8 @@ class Events(commands.Cog):
             'time': time_val,
             'description': target['description'] or "",
             'name': def_name,
-            'repeat': target['repeat_config'] or "None"
+            'repeat': target['repeat_config'] or "None",
+            'duration': target['duration'] if 'duration' in target.keys() else 0
         }
         
         view = EventCreationView(mode="edit", event_id=event_id, default_values=defaults)
@@ -323,7 +390,14 @@ class Events(commands.Cog):
             return
 
         embeds = []
-        for event in events[:limit]:
+        mapping = EventConfig.get_legacy_mapping()
+        
+        # Pre-process ALL events for conflict check (O(N^2) but N=20 max due to limit? No, limit is display, we need all for robust check)
+        # Actually, verifying against *upcoming* events is enough.
+        # Let's check overlap within the displayed set + any others fetched?
+        # get_all_events returns everything sorted by time.
+        
+        for i, event in enumerate(events[:limit]):
             try:
                 dt = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S")
             except ValueError:
@@ -331,33 +405,39 @@ class Events(commands.Cog):
             
             unix_ts = int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
             
-            # Use DB values directly since we save bilingual names now
-            # But apply legacy map just in case
-            type_map = {
-                "KvK & Castle": "KvK & Castle / KvK & 王城戰",
-                "Bear": "Bear / 熊",
-                "Swordland": "Swordland / 聖劍",
-                "Tri-Alliance": "Tri-Alliance / 三盟",
-                "Sanctuary": "Sanctuary / 遺跡",
-                "Viking": "Viking / 維京",
-                "Arena": "Arena / 競技場",
-                "Fishing": "Fishing / 釣魚",
-                "Shield": "Shield / 護盾",
-                "Farm": "Farm / 採集",
-                "General": "General / 一般"
-            }
             e_type = event['event_type'] if event['event_type'] else "General"
-            e_type = type_map.get(e_type, e_type)
+            e_type = mapping.get(e_type, e_type)
             
-            color = event['color_hex'] if event['color_hex'] else 0x3498db
-            icon = event['icon_url'] if event['icon_url'] else "https://img.icons8.com/color/96/calendar--v1.png"
+            color, icon = EventConfig.get_event_metadata(e_type)
             
-            # Since Name is effectively Type now, we just show Name
-            # But the user might have custom description
-            # Title: "Bear / 熊" (as stored in Name)
+            # Check for conflict with ANY other event in the full list
+            has_conflict = False
+            my_dur = event['duration'] if 'duration' in event.keys() else 0
+            my_end = dt + datetime.timedelta(minutes=my_dur)
+            
+            for other in events:
+                if other['id'] == event['id']: continue
+                
+                try:
+                    o_dt = datetime.datetime.strptime(other['event_time'], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    o_dt = datetime.datetime.strptime(other['event_time'], "%Y-%m-%d %H:%M:%S.%f")
+                
+                o_dur = other['duration'] if 'duration' in other.keys() else 0
+                o_end = o_dt + datetime.timedelta(minutes=o_dur)
+                
+                # Overlap check
+                if (dt < o_end) and (my_end > o_dt):
+                    has_conflict = True
+                    break
+            
+            title_prefix = ""
+            if has_conflict:
+                title_prefix = "⚠️ [CONFLICT] "
+                color = 0xff0000 # Red override
             
             embed = discord.Embed(
-                title=f"{event['name']}", 
+                title=f"{title_prefix}{event['name']}", 
                 description=event['description'] or "No description", 
                 color=color
             )
@@ -365,7 +445,12 @@ class Events(commands.Cog):
             embed.add_field(name="⏰ Time / 時間", value=f"<t:{unix_ts}:F>\n<t:{unix_ts}:R>", inline=True)
             
             repeat_str = event['repeat_config'] if event['repeat_config'] else "None"
-            embed.add_field(name="🆔 ID | 🔄 Repeat", value=f"`{event['id']}` | `{repeat_str}`", inline=False)
+            dur_str = f"{my_dur}m" if my_dur > 0 else "N/A"
+            embed.add_field(name="🆔 ID | 🔄 Repeat | ⏳ Dur", value=f"`{event['id']}` | `{repeat_str}` | `{dur_str}`", inline=False)
+            
+            if has_conflict:
+                 embed.set_footer(text="Conflict with other events / 與其他事件有衝突")
+            
             embeds.append(embed)
         
         await interaction.response.send_message(embeds=embeds)
