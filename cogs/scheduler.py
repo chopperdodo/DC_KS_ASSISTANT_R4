@@ -61,69 +61,83 @@ class Scheduler(commands.Cog):
     async def check_reminders(self):
         await self.bot.wait_until_ready()
         
-        print(f"\n🔍 [SCHEDULER] check at {datetime.datetime.now().strftime('%H:%M:%S')}")
-        
-        events = await database.get_upcoming_reminders()
-        
-        # Cleanup
-        await database.delete_old_events()
-
-        for event in events:
-            guild_id = event['guild_id']
-            if not guild_id: continue
-                
-            channel_id = await database.get_guild_channel(guild_id)
-            if not channel_id: continue
-
+        try:
+            print(f"\n🔍 [SCHEDULER] check at {datetime.datetime.now().strftime('%H:%M:%S')}")
+            
+            # Cleanup FIRST
             try:
-                channel = self.bot.get_channel(channel_id)
-                if not channel:
-                    channel = await self.bot.fetch_channel(channel_id)
+                await database.delete_old_events()
             except Exception as e:
-                print(f"❌ Error getting channel: {e}")
-                continue
+                print(f"❌ Error deleting old events: {e}")
 
-            try:
-                # Parse naive datetime from DB
-                dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S")
-            except ValueError:
+            events = await database.get_upcoming_reminders()
+            
+            for event in events:
                 try:
-                    dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S.%f")
-                except ValueError:
-                    dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M") # fallback
+                    guild_id = event['guild_id']
+                    if not guild_id: continue
+                        
+                    channel_id = await database.get_guild_channel(guild_id)
+                    if not channel_id: continue
 
-            # Assume stored time IS UTC (per user intent), so make it aware
-            event_time = dt_naive.replace(tzinfo=datetime.timezone.utc)
-            
-            # Compare with UTC now
-            now = datetime.datetime.now(datetime.timezone.utc)
-            
-            time_diff = event_time - now
-            minutes_diff = time_diff.total_seconds() / 60
-            
-            e_type = event['event_type']
-            name = event['name']
-            
-            # 30 Minute Reminder (Normal)
-            # Logic check: Shield is unique.
-            is_shield = "Shield" in name
-            
-            if not is_shield and 25 <= minutes_diff <= 35 and not event['reminder_30_sent']:
-                print(f"  🔔 Sending 30m reminder for {event['name']}")
-                await self.send_reminder_embed(channel, event, minutes_diff)
-                await database.mark_reminder_sent(event['id'], "30")
+                    try:
+                        channel = self.bot.get_channel(channel_id)
+                        if not channel:
+                            channel = await self.bot.fetch_channel(channel_id)
+                    except Exception as e:
+                        print(f"❌ Error getting channel: {e}")
+                        continue
 
-            # 15 Minute Reminder (Shield Only)
-            elif is_shield and 10 <= minutes_diff <= 20 and not event['reminder_30_sent']:
-                print(f"  🛡️ Sending 15m Shield Alert for {event['name']}")
-                await self.send_reminder_embed(channel, event, minutes_diff)
-                await database.mark_reminder_sent(event['id'], "30") # Mark "early warning" as done
+                    try:
+                        # Parse naive datetime from DB
+                        dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S")
+                    except ValueError:
+                        try:
+                            dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M:%S.%f")
+                        except ValueError:
+                            dt_naive = datetime.datetime.strptime(event['event_time'], "%Y-%m-%d %H:%M") # fallback
 
-            # 5 Minute Reminder (All)
-            elif 0 < minutes_diff <= 5 and not event['reminder_5_sent']:
-                print(f"  ⚡ Sending 5m reminder for {event['name']}")
-                await self.send_reminder_embed(channel, event, minutes_diff)
-                await database.mark_reminder_sent(event['id'], "5")
+                    # Assume stored time IS UTC (per user intent), so make it aware
+                    event_time = dt_naive.replace(tzinfo=datetime.timezone.utc)
+                    
+                    # Compare with UTC now
+                    now = datetime.datetime.now(datetime.timezone.utc)
+                    
+                    time_diff = event_time - now
+                    minutes_diff = time_diff.total_seconds() / 60
+                    
+                    # Use dictionary access (Fixed Bug)
+                    e_type = event['event_type']
+                    name = event['name']
+                    
+                    # 30 Minute Reminder (Normal)
+                    is_shield = "Shield" in name
+                    
+                    # 30 Minute Reminder (Removed per user request)
+                    # is_shield = "Shield" in name
+                    # if not is_shield and 25 <= minutes_diff <= 35 and not event['reminder_30_sent']: ...
+
+                    # 15 Minute Reminder (Shield Only)
+                    if is_shield and 10 <= minutes_diff <= 20 and not event['reminder_30_sent']:
+                        print(f"  🛡️ Sending 15m Shield Alert for {event['name']}")
+                        await self.send_reminder_embed(channel, event, minutes_diff)
+                        await database.mark_reminder_sent(event['id'], "30") # Reuse column for tracking
+
+                    # 5 Minute Reminder (All)
+                    elif 0 < minutes_diff <= 5 and not event['reminder_5_sent']:
+                        print(f"  ⚡ Sending 5m reminder for {event['name']}")
+                        await self.send_reminder_embed(channel, event, minutes_diff)
+                        await database.mark_reminder_sent(event['id'], "5")
+                        
+                except Exception as e:
+                    print(f"❌ Error processing event {event.get('id', '?')}: {e}")
+                    import traceback
+                    traceback.print_exc()
+
+        except Exception as e:
+            print(f"❌ Fatal Scheduler Error: {e}")
+            import traceback
+            traceback.print_exc()
 
 async def setup(bot):
     await bot.add_cog(Scheduler(bot))

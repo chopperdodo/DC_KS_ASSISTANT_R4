@@ -47,6 +47,7 @@ async def main():
         # Load extensions
         await bot.load_extension("cogs.events")
         await bot.load_extension("cogs.scheduler")
+        await bot.load_extension("cogs.tips")
         
         token = os.getenv("DISCORD_TOKEN")
         if not token or token == "your_token_here":
